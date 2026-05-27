@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BGS Sample Lookup</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            padding: 40px;
+            background-color: #f9f9f9;
+        }
+        .search-container {
+            max-width: 450px;
+            background: white;
+            padding: 25px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .preamble {
+            font-size: 14px;
+            color: #555;
+            line-height: 1.5;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #eee;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #333;
+        }
+        select, input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 15px;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            background-color: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0052a3;
+        }
+    </style>
+</head>
+<body>
+
+<div class="search-container">
+    <p class="preamble">
+        This form queries the BGS GSR API, and if the sample data is publicly available, returns the web page showing it.
+    </p>
+
+    <form id="sampleForm">
+        <label for="searchType">Search By</label>
+        <select id="searchType">
+            <option value="id">Sample ID (e.g., GSR00712981)</option>
+            <option value="name">Sample Name (e.g., E16098)</option>
+            <option value="parent_id">Parts of a GSR sample (e.g., GSR01574324)</option>
+        </select>
+
+        <label for="searchQuery">Search Term</label>
+        <input type="text" id="searchQuery" placeholder="e.g., GSR00712981" required>
+        
+        <button type="submit">Submit</button>
+    </form>
+</div>
+
+<script>
+    const searchTypeSelect = document.getElementById('searchType');
+    const searchQueryInput = document.getElementById('searchQuery');
+
+    // Dynamic placeholder text switcher for all three options
+    searchTypeSelect.addEventListener('change', function() {
+        if (this.value === 'id') {
+            searchQueryInput.placeholder = "e.g., GSR00712981";
+        } else if (this.value === 'name') {
+            searchQueryInput.placeholder = "e.g., E16098";
+        } else if (this.value === 'parent_id') {
+            searchQueryInput.placeholder = "e.g., GSR01574324";
+        }
+    });
+
+    // Form submission logic
+    document.getElementById('sampleForm').addEventListener('submit', function(event) {
+        event.preventDefault(); 
+        
+        const searchType = searchTypeSelect.value;
+        const query = searchQueryInput.value.trim();
+        
+        if (query) {
+            let destinationUrl = '';
+            
+            if (searchType === 'id') {
+                // Direct item path lookup
+                destinationUrl = `https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items/${query}`;
+            } else if (searchType === 'name') {
+                // Filter by sample name query param
+                destinationUrl = `https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items?sample_name=${encodeURIComponent(query)}`;
+            } else if (searchType === 'parent_id') {
+                // Filter by parent sample ID query param
+                destinationUrl = `https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items?parent_sample_id=${encodeURIComponent(query)}`;
+            }
+            
+            // Opens the destination URL in a new tab
+            window.open(destinationUrl, '_blank');
+        }
+    });
+</script>
+
+</body>
+</html>

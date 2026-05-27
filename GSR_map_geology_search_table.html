@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BGS Map Bounding Box Search</title>
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+    
+    <style>
+        html, body {
+            height: 100%;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        
+        #header {
+            background: #2c3e50;
+            color: white;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 50px;
+            z-index: 2000;
+            box-sizing: border-box;
+        }
+        #header h1 { margin: 0; font-size: 16px; }
+        #header p { margin: 2px 0 0 0; font-size: 11px; color: #bdc3c7; }
+        .controls { display: flex; align-items: center; gap: 12px; }
+        button { border: none; padding: 8px 16px; font-size: 13px; font-weight: bold; border-radius: 4px; cursor: pointer; transition: background 0.2s; }
+        #search-btn { background-color: #0066cc; color: white; }
+        #search-btn:hover { background-color: #0052a3; }
+        #download-btn { background-color: #27ae60; color: white; }
+        #download-btn:hover { background-color: #219653; }
+        button:disabled { background-color: #7f8c8d !important; cursor: not-allowed; opacity: 0.6; }
+        #status { font-size: 13px; font-weight: 500; }
+        
+        #map {
+            position: absolute;
+            top: 50px; 
+            bottom: 40px; /* Space for collapsed panel handle */
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            background: #e5e3df; 
+        }
+        
+        /* BOTTOM PANEL DRAWER */
+        #bottom-panel {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 300px;
+            background: white;
+            z-index: 2000;
+            box-shadow: 0 -3px 10px rgba(0,0,0,0.15);
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.3s ease-in-out;
+        }
+        #bottom-panel.collapsed { transform: translateY(260px); }
+        #panel-header {
+            background: #f8f9fa;
+            padding: 10px 20px;
+            border-top: 1px solid #dee2e6;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            height: 40px;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        #panel-header h2 { margin: 0; font-size: 13px; color: #34495e; }
+        #toggle-icon { font-size: 12px; font-weight: bold; color: #7f8c8d; }
+        #panel-content { flex-grow: 1; overflow: auto; padding: 0; }
+        
+        /* DATA TABLE STYLES */
+        .data-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; table-layout: fixed; }
+        .data-table th {
+            background-color: #f1f3f5;
+            color: #495057;
+            font-weight: bold;
+            padding: 10px 12px;
+            border-bottom: 2px solid #dee2e6;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .data-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #dee2e6;
+            color: #333;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            cursor: pointer; /* Indicate row is clickable */
+        }
+        .data-table tr:hover:not(.selected) { background-color: #f8f9fa; }
+        .data-table a { color: #0066cc; text-decoration: none; font-weight: bold; }
+        
+        /* ==========================================
+           NEW CSS: SELECTED ROW HIGHLIGHT
+           ========================================== */
+        .data-table tr.selected td {
+            background-color: #e3f2fd !important; /* Light blue background */
+            font-weight: bold;
+            border-bottom: 1px solid #90caf9;
+        }
+        
+        .table-parent-desc { color: #e67e22; font-style: italic; }
+
+        /* POPUP STYLES */
+        .popup-scroll-container { padding-right: 5px; }
+        .sample-item h3 { margin: 0 0 6px 0; font-size: 15px; color: #2c3e50; }
+        .sample-item p { margin: 4px 0; font-size: 12px; color: #555; line-height: 1.4; }
+        .sample-desc { font-style: italic; color: #666 !important; background: #f5f5f5; padding: 4px 6px; border-radius: 3px; margin: 6px 0 !important; }
+        .parent-desc { background: #fdf2e9; border-left: 3px solid #e67e22; }
+        .popup-link { display: inline-block; margin-top: 6px; color: #0066cc; text-decoration: none; font-weight: bold; font-size: 12px; }
+        .parent-link { color: #e67e22; margin-top: 8px; margin-bottom: 2px; }
+        .geology-popup h4 { margin: 0 0 6px 0; color: #873600; font-size: 14px; border-bottom: 1px solid #f5cba7; padding-bottom: 4px; }
+        .geology-popup p { margin: 4px 0; font-size: 12px; line-height: 1.45; }
+        .leaflet-top.leaflet-right { top: 10px; }
+    </style>
+</head>
+<body>
+
+<div id="header">
+    <div>
+        <h1>BGS Generic Samples Register — Map Search</h1>
+        <p>Search places, click map to identify geology, or click "Search" to load samples. Click table rows to highlight on map.</p>
+    </div>
+    <div class="controls">
+        <div id="status">Move map to begin</div>
+        <button id="search-btn">Search This Area</button>
+        <button id="download-btn" disabled>Download CSV</button>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<div id="bottom-panel" class="collapsed">
+    <div id="panel-header">
+        <h2 id="panel-title">Sample Data Registry Table (0 Samples Loaded)</h2>
+        <div id="toggle-icon">▲ EXPAND TABLE</div>
+    </div>
+    <div id="panel-content">
+        <table class="data-table">
+            <colgroup>
+                <col style="width: 15%">
+                <col style="width: 15%">
+                <col style="width: 15%">
+                <col style="width: 25%">
+                <col style="width: 15%">
+                <col style="width: 15%">
+            </colgroup>
+            <thead>
+                <tr>
+                    <th>Sample ID</th>
+                    <th>Sample Name</th>
+                    <th>Sample Type</th>
+                    <th>Description</th>
+                    <th>Locality Name</th>
+                    <th>Locality Description</th>
+                </tr>
+            </thead>
+            <tbody id="table-body">
+                <tr>
+                    <td colspan="6" style="text-align: center; color: #7f8c8d; padding: 30px;">Pan map and execute search to load data. Click a row to highlight it on the map.</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+
+<script>
+    if (typeof L !== 'undefined') {
+        
+        const map = L.map('map').setView([54.5, -3.5], 6);
+
+        const osmBase = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19, attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+
+        const bedrockGeology = L.tileLayer.wms("https://map.bgs.ac.uk/arcgis/services/BGS_Detailed_Geology/MapServer/WMSServer", {
+            layers: 'BGS.50k.Bedrock', format: 'image/png', transparent: true, version: '1.1.1', opacity: 0.5, minZoom: 11, maxZoom: 19, attribution: '&copy; UKRI BGS'
+        }).addTo(map); 
+
+        L.control.layers({ "OpenStreetMap": osmBase }, { "BGS Geology": bedrockGeology }, { position: "topleft" }).addTo(map);
+        L.Control.geocoder({ defaultMarkGeocode: true, placeholder: "Search place...", position: "topright" }).addTo(map);
+
+        const markersLayer = L.layerGroup().addTo(map);
+        const searchBtn = document.getElementById('search-btn');
+        const downloadBtn = document.getElementById('download-btn');
+        const statusDiv = document.getElementById('status');
+        const bottomPanel = document.getElementById('bottom-panel');
+        const panelHeader = document.getElementById('panel-header');
+        const panelTitle = document.getElementById('panel-title');
+        const toggleIcon = document.getElementById('toggle-icon');
+        const tableBody = document.getElementById('table-body');
+
+        let currentSearchPayload = null;
+        
+        // ==========================================
+        // NEW VARIABLE: MAPS SAMPLE IDs TO MARKER OBJECTS
+        // ==========================================
+        let sampleIdToMarkerMap = {}; 
+
+        // Panel Toggle Logic
+        function togglePanel(forceClose = false) {
+            if (forceClose) {
+                bottomPanel.classList.add('collapsed');
+            } else {
+                bottomPanel.classList.toggle('collapsed');
+            }
+            
+            if (bottomPanel.classList.contains('collapsed')) {
+                toggleIcon.innerText = "▲ EXPAND TABLE";
+            } else {
+                toggleIcon.innerText = "▼ MINIMIZE TABLE";
+            }
+        }
+        panelHeader.addEventListener('click', () => togglePanel());
+
+        function getTruncatedText(text, maxWords = 10) {
+            if (!text || text.trim() === "") return "";
+            const words = text.trim().split(/\s+/);
+            return words.length > maxWords ? words.slice(0, maxWords).join(' ') + '...' : text.trim();
+        }
+
+        // GEOLOGY IDENTIFY TOOL
+        map.on('click', function(e) {
+            if (!map.hasLayer(bedrockGeology) || map.getZoom() < 11) return;
+
+            const size = map.getSize();
+            const bounds = map.getBounds();
+            const point = map.latLngToContainerPoint(e.latlng);
+
+            const params = {
+                request: 'GetFeatureInfo', service: 'WMS', version: '1.1.1',
+                layers: 'BGS.50k.Bedrock', query_layers: 'BGS.50k.Bedrock',
+                srs: 'EPSG:4326', bbox: `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`,
+                width: size.x, height: size.y, x: Math.round(point.x), y: Math.round(point.y),
+                info_format: 'application/geo+json'
+            };
+
+            const queryString = Object.keys(params).map(key => `${key}=${encodeURIComponent(params[key])}`).join('&');
+            const geoPopup = L.popup().setLatLng(e.latlng).setContent('<p style="font-size:12px;color:#666;">Querying BGS...</p>').openOn(map);
+
+            fetch(`https://map.bgs.ac.uk/arcgis/services/BGS_Detailed_Geology/MapServer/WMSServer?${queryString}`)
+                .then(res => res.json())
+                .then(json => {
+                    if (json?.features?.length > 0) {
+                        const props = json.features[0].properties;
+                        geoPopup.setContent(`
+                            <div class="geology-popup">
+                                <h4>🪨 Bedrock Geology</h4>
+                                <p><strong>Formation:</strong> ${props.LEX_D || 'N/A'}</p>
+                                <p><strong>Rock Type:</strong> ${props.RCS_D || 'N/A'}</p>
+                                <p><strong>Age:</strong> ${props.MAX_TIME_D || 'N/A'}</p>
+                            </div>`);
+                    } else { geoPopup.setContent('<p style="font-size:12px;">No data here.</p>'); }
+                }).catch(() => geoPopup.setContent('<p style="font-size:12px;color:red;">Error.</p>'));
+        });
+
+        // SAMPLES SEARCH LOGIC
+        searchBtn.addEventListener('click', function() {
+            markersLayer.clearLayers();
+            downloadBtn.disabled = true;
+            currentSearchPayload = null;
+            
+            // ==========================================
+            // RESET LOOKUP MAP ON NEW SEARCH
+            // ==========================================
+            sampleIdToMarkerMap = {}; 
+            
+            statusDiv.innerText = "Searching BGS API...";
+            searchBtn.disabled = true;
+            tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding:20px;">Fetching...</td></tr>`;
+
+            const bounds = map.getBounds();
+            const bboxParam = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+            
+            fetch(`https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items?bbox=${bboxParam}&limit=200`)
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.features || data.features.length === 0) {
+                        statusDiv.innerText = "0 samples found.";
+                        panelTitle.innerText = "Sample Table (0 Samples)";
+                        tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 20px;">No samples in this area.</td></tr>`;
+                        searchBtn.disabled = false;
+                        return null;
+                    }
+
+                    statusDiv.innerText = "Checking lineages...";
+                    const parentIdsToFetch = new Set();
+                    data.features.forEach(f => {
+                        const p = f.properties;
+                        if (!(p.sample_description?.trim() || p.description?.trim()) && p.parent_sample_id) {
+                            parentIdsToFetch.add(p.parent_sample_id);
+                        }
+                    });
+
+                    const parentPromises = Array.from(parentIdsToFetch).map(pid => 
+                        fetch(`https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items/${pid}`)
+                            .then(res => res.ok ? res.json() : null)
+                            .then(d => ({ id: pid, data: d })).catch(() => ({ id: pid, data: null }))
+                    );
+
+                    return Promise.all(parentPromises).then(results => {
+                        const parentDescMap = {};
+                        results.forEach(r => {
+                            const pd = r.data?.properties;
+                            const d = pd?.sample_description || pd?.description;
+                            if (d?.trim()) parentDescMap[r.id] = d;
+                        });
+                        return { mapData: data, parentDescs: parentDescMap };
+                    });
+                })
+                .then(payload => {
+                    if (!payload) return;
+                    currentSearchPayload = payload;
+                    const data = payload.mapData;
+                    const parentDescs = payload.parentDescs;
+
+                    statusDiv.innerText = `Found ${data.features.length} samples.`;
+                    panelTitle.innerText = `Sample Table (${data.features.length} Samples)`;
+                    tableBody.innerHTML = '';
+
+                    const coordinateGroups = {};
+                    
+                    data.features.forEach(feature => {
+                        const props = feature.properties;
+                        const sampleId = props.id || "Unknown";
+                        const localDesc = props.sample_description || props.description || "";
+                        
+                        let displayDesc = localDesc;
+                        let isParentFallback = false;
+                        if (!localDesc.trim() && props.parent_sample_id && parentDescs[props.parent_sample_id]) {
+                            displayDesc = parentDescs[props.parent_sample_id];
+                            isParentFallback = true;
+                        }
+
+                        // CREATE TABLE ROW
+                        const tr = document.createElement('tr');
+                        tr.setAttribute('data-sample-id', sampleId); // Store ID for lookup
+                        tr.innerHTML = `
+                            <td><a href="https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items/${sampleId}" target="_blank" onclick="event.stopPropagation();">${sampleId} ↗</a></td>
+                            <td title="${props.sample_name || ''}">${props.sample_name || '-'}</td>
+                            <td>${props.sample_type || '-'}</td>
+                            <td title="${displayDesc}" class="${isParentFallback ? 'table-parent-desc' : ''}">
+                                ${isParentFallback ? '[Parent] ' : ''}${getTruncatedText(displayDesc, 12)}
+                            </td>
+                            <td title="${props.locality_name || ''}">${props.locality_name || props.locality || '-'}</td>
+                            <td title="${props.locality_description || ''}">${props.locality_description || props.locality_desc || '-'}</td>
+                        `;
+                        
+                        // ==========================================
+                        // NEW FEATURE: ROW CLICK HANDLER (HIGHLIGHT)
+                        // ==========================================
+                        tr.addEventListener('click', function() {
+                            // 1. Visually select the row
+                            document.querySelectorAll('.data-table tr.selected').forEach(el => el.classList.remove('selected'));
+                            this.classList.add('selected');
+
+                            // 2. Find associated marker
+                            const targetId = this.getAttribute('data-sample-id');
+                            const marker = sampleIdToMarkerMap[targetId];
+
+                            if (marker) {
+                                // 3. Minimize panel so map is visible
+                                togglePanel(true); // Force close
+
+                                // 4. Highlight pin (pan and open popup)
+                                map.setView(marker.getLatLng(), map.getZoom(), { animate: true });
+                                marker.openPopup();
+                            }
+                        });
+                        
+                        tableBody.appendChild(tr);
+
+                        // Group coordinates for map
+                        if (feature.geometry?.type === 'Point') {
+                            const key = `${feature.geometry.coordinates[0]}_${feature.geometry.coordinates[1]}`;
+                            if (!coordinateGroups[key]) {
+                                coordinateGroups[key] = { lat: feature.geometry.coordinates[1], lng: feature.geometry.coordinates[0], features: [] };
+                            }
+                            coordinateGroups[key].features.push(feature);
+                        }
+                    });
+
+                    // Render Map Pins & BUILD LOOKUP MAP
+                    Object.values(coordinateGroups).forEach(group => {
+                        let popupHtml = `<div class="popup-scroll-container">`;
+                        if (group.features.length > 1) popupHtml += `<h4 style="margin:0 0 12px 0;color:#e67e22;font-size:13px;">📌 ${group.features.length} samples here:</h4>`;
+
+                        const sharedMarker = L.marker([group.lat, group.lng]);
+
+                        group.features.forEach((feat, index) => {
+                            const p = feat.properties;
+                            const sid = p.id;
+                            
+                            // ==========================================
+                            // POPULATE LOOKUP MAP: ID -> MARKER OBJECT
+                            // ==========================================
+                            if (sid) sampleIdToMarkerMap[sid] = sharedMarker;
+
+                            const d = p.sample_description || p.description || "";
+                            let dHtml = '';
+                            if (d.trim()) dHtml = `<p class="sample-desc"><strong>Desc:</strong> "${getTruncatedText(d)}"</p>`;
+                            else if (p.parent_sample_id && parentDescs[p.parent_sample_id]) dHtml = `<p class="sample-desc parent-desc"><strong>[Parent Desc]:</strong> "${getTruncatedText(parentDescs[p.parent_sample_id])}"</p>`;
+
+                            if (index > 0) popupHtml += `<hr style="border:0;border-top:1px solid #ddd;margin:12px 0;">`;
+                            popupHtml += `
+                                <div class="sample-item">
+                                    <h3>${p.sample_name || 'Unnamed'}</h3>
+                                    <p><strong>ID:</strong> ${sid || 'N/A'}</p>
+                                    <p><strong>Type:</strong> ${p.sample_type || 'N/A'}</p>
+                                    ${dHtml}
+                                    <a class="popup-link" href="https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items/${sid}" target="_blank">Details ↗</a>
+                                </div>`;
+                        });
+
+                        popupHtml += `</div>`;
+                        sharedMarker.bindPopup(popupHtml, { maxHeight: 290, minWidth: 260 });
+                        markersLayer.addLayer(sharedMarker);
+                    });
+
+                    // Auto-expand table on success
+                    bottomPanel.classList.remove('collapsed');
+                    toggleIcon.innerText = "▼ MINIMIZE TABLE";
+
+                    searchBtn.disabled = false;
+                    downloadBtn.disabled = false; 
+                })
+                .catch(() => {
+                    statusDiv.innerText = "Error.";
+                    tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:red;">Error loading data.</td></tr>`;
+                    searchBtn.disabled = false;
+                });
+        });
+
+        // CSV DOWNLOAD
+        downloadBtn.addEventListener('click', function() {
+            if (!currentSearchPayload) return;
+            const features = currentSearchPayload.mapData.features;
+            const parentDescs = currentSearchPayload.parentDescs || {};
+            const headers = ['Sample_ID', 'Sample_Name', 'Sample_Type', 'Description', 'Desc_Source', 'Locality', 'Locality_Desc', 'Parent_ID', 'Lat', 'Lon'];
+            const rows = features.map(f => {
+                const p = f.properties;
+                let d = p.sample_description || p.description || '';
+                let s = 'Local';
+                if (!d.trim() && p.parent_sample_id && parentDescs[p.parent_sample_id]) { d = parentDescs[p.parent_sample_id]; s = 'Parent Fallback'; }
+                const coords = f.geometry?.type === 'Point' ? f.geometry.coordinates : ['', ''];
+                return [p.id, p.sample_name, p.sample_type, d, s, p.locality_name || p.locality, p.locality_description || p.locality_desc, p.parent_sample_id, coords[1], coords[0]].map(field => {
+                    let text = String(field || '').replace(/"/g, '""');
+                    return (text.includes(',') || text.includes('"') || text.includes('\n')) ? `"${text}"` : text;
+                });
+            });
+            const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.download = "bgs_samples.csv";
+            document.body.appendChild(link); link.click(); document.body.removeChild(link);
+        });
+
+    } else { document.getElementById('map').innerHTML = "<p style='padding:20px;color:red;'>Map error.</p>"; }
+</script>
+
+</body>
+</html>

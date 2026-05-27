@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BGS Map Bounding Box Search</title>
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+    
+    <style>
+        html, body {
+            height: 100%;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        
+        #header {
+            background: #2c3e50;
+            color: white;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 50px;
+            z-index: 2000;
+            box-sizing: border-box;
+        }
+        #header h1 {
+            margin: 0;
+            font-size: 16px;
+        }
+        #header p {
+            margin: 2px 0 0 0;
+            font-size: 11px;
+            color: #bdc3c7;
+        }
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        button {
+            border: none;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: bold;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        #search-btn {
+            background-color: #0066cc;
+            color: white;
+        }
+        #search-btn:hover {
+            background-color: #0052a3;
+        }
+        #download-btn {
+            background-color: #27ae60; 
+            color: white;
+        }
+        #download-btn:hover {
+            background-color: #219653;
+        }
+        button:disabled {
+            background-color: #7f8c8d !important;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        #status {
+            font-size: 13px;
+            font-weight: 500;
+        }
+        
+        #map {
+            position: absolute;
+            top: 50px; 
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            background: #e5e3df; 
+        }
+        
+        /* Popup Styling */
+        .popup-scroll-container {
+            padding-right: 5px;
+        }
+        .sample-item h3 {
+            margin: 0 0 6px 0;
+            font-size: 15px;
+            color: #2c3e50;
+        }
+        .sample-item p {
+            margin: 4px 0;
+            font-size: 12px;
+            color: #555;
+            line-height: 1.4;
+        }
+        .sample-desc {
+            font-style: italic;
+            color: #666 !important;
+            background: #f5f5f5;
+            padding: 4px 6px;
+            border-radius: 3px;
+            margin: 6px 0 !important;
+        }
+        .parent-desc {
+            background: #fdf2e9; 
+            border-left: 3px solid #e67e22;
+        }
+        .popup-link {
+            display: inline-block;
+            margin-top: 6px;
+            color: #0066cc;
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        .popup-link:hover {
+            text-decoration: underline;
+        }
+        .parent-link {
+            color: #e67e22;
+            margin-top: 8px;
+            margin-bottom: 2px;
+        }
+        
+        /* Geology Identify Box Styling */
+        .geology-popup h4 {
+            margin: 0 0 6px 0;
+            color: #873600; 
+            font-size: 14px;
+            border-bottom: 1px solid #f5cba7;
+            padding-bottom: 4px;
+        }
+        .geology-popup p {
+            margin: 4px 0;
+            font-size: 12px;
+            line-height: 1.45;
+        }
+        
+        .leaflet-top.leaflet-right {
+            top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="header">
+    <div>
+        <h1>BGS Generic Samples Register — Map Search</h1>
+        <p>Search places, click anywhere on map to identify geology, or use "Search This Area" to load samples.</p>
+    </div>
+    <div class="controls">
+        <div id="status">Move map to begin</div>
+        <button id="search-btn">Search This Area</button>
+        <button id="download-btn" disabled>Download CSV</button>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+
+<script>
+    if (typeof L !== 'undefined') {
+        
+        const map = L.map('map').setView([54.5, -3.5], 6);
+
+        const osmBase = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        const bedrockGeology = L.tileLayer.wms("https://map.bgs.ac.uk/arcgis/services/BGS_Detailed_Geology/MapServer/WMSServer", {
+            layers: 'BGS.50k.Bedrock',
+            format: 'image/png',
+            transparent: true,
+            version: '1.1.1', 
+            opacity: 0.5, 
+            minZoom: 11,  
+            maxZoom: 19,
+            attribution: 'Contains British Geological Survey materials &copy; UKRI'
+        }).addTo(map); 
+
+        const baseMaps = { "OpenStreetMap Standard": osmBase };
+        const overlayMaps = { "BGS 50K Bedrock Geology": bedrockGeology };
+        L.control.layers(baseMaps, overlayMaps, { position: "topleft" }).addTo(map);
+
+        L.Control.geocoder({
+            defaultMarkGeocode: true,
+            placeholder: "Search for place or postcode...",
+            position: "topright"
+        }).addTo(map);
+
+        const markersLayer = L.layerGroup().addTo(map);
+        const searchBtn = document.getElementById('search-btn');
+        const downloadBtn = document.getElementById('download-btn');
+        const statusDiv = document.getElementById('status');
+
+        let currentSearchPayload = null;
+
+        function getTruncatedText(text, maxWords = 10) {
+            if (!text || text.trim() === "") return "";
+            const words = text.trim().split(/\s+/);
+            return words.length > maxWords ? words.slice(0, maxWords).join(' ') + '...' : text.trim();
+        }
+
+        // WMS GEOLOGY IDENTIFY TOOL
+        map.on('click', function(e) {
+            if (!map.hasLayer(bedrockGeology)) return;
+            if (map.getZoom() < 11) {
+                L.popup()
+                    .setLatLng(e.latlng)
+                    .setContent('<p style="margin:0; font-size:12px; color:#555;">Zoom in closer (Level 11+) to see and identify the Bedrock Geology layer.</p>')
+                    .openOn(map);
+                return;
+            }
+
+            const size = map.getSize();
+            const bounds = map.getBounds();
+            const point = map.latLngToContainerPoint(e.latlng);
+
+            const wmsUrl = "https://map.bgs.ac.uk/arcgis/services/BGS_Detailed_Geology/MapServer/WMSServer";
+            const params = {
+                request: 'GetFeatureInfo',
+                service: 'WMS',
+                version: '1.1.1',
+                layers: 'BGS.50k.Bedrock',
+                query_layers: 'BGS.50k.Bedrock',
+                styles: '',
+                srs: 'EPSG:4326',
+                bbox: `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`,
+                width: size.x,
+                height: size.y,
+                x: Math.round(point.x),
+                y: Math.round(point.y),
+                info_format: 'application/geo+json'
+            };
+
+            const queryString = Object.keys(params).map(key => `${key}=${encodeURIComponent(params[key])}`).join('&');
+            
+            const geoPopup = L.popup()
+                .setLatLng(e.latlng)
+                .setContent('<p style="margin:0; font-size:12px; color:#666;">Querying BGS bedrock logs...</p>')
+                .openOn(map);
+
+            fetch(`${wmsUrl}?${queryString}`)
+                .then(res => {
+                    if (!res.ok) throw new Error("WMS server rejection");
+                    return res.json();
+                })
+                .then(json => {
+                    if (json && json.features && json.features.length > 0) {
+                        const props = json.features[0].properties;
+                        const formation = props.LEX_D || props.lex_d || "Not Available";
+                        const rockType = props.RCS_D || props.rcs_d || "Not Available";
+                        const age = props.MAX_TIME_D || props.max_time_d || "Not Available";
+                        const environment = props.ENVIRONM_D || props.environm_d || "";
+
+                        let popupContent = `
+                            <div class="geology-popup" style="min-width:220px;">
+                                <h4>🪨 Bedrock Geology</h4>
+                                <p><strong>Formation:</strong> ${formation}</p>
+                                <p><strong>Rock Type:</strong> ${rockType}</p>
+                                <p><strong>Age:</strong> ${age}</p>
+                        `;
+                        if (environment) {
+                            popupContent += `<p class="sample-desc" style="margin-top:6px !important;">${environment}</p>`;
+                        }
+                        popupContent += `</div>`;
+
+                        geoPopup.setContent(popupContent);
+                    } else {
+                        geoPopup.setContent('<p style="margin:0; font-size:12px;">No bedrock geology data recorded at this specific coordinate.</p>');
+                    }
+                })
+                .catch(err => {
+                    console.error("Identify failure: ", err);
+                    geoPopup.setContent('<p style="margin:0; font-size:12px; color:red;">Failed to retrieve geology attributes.</p>');
+                });
+        });
+
+        // SAMPLES BBOX REGISTER SEARCH LOGIC
+        searchBtn.addEventListener('click', function() {
+            markersLayer.clearLayers();
+            downloadBtn.disabled = true; 
+            currentSearchPayload = null;
+            statusDiv.innerText = "Searching BGS API...";
+            searchBtn.disabled = true;
+
+            const bounds = map.getBounds();
+            const bboxParam = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+            
+            // INCREASED FEATURE CAP LIMIT PARAMETER TO 200 ENTRIES
+            const apiUrl = `https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items?bbox=${bboxParam}&limit=200`;
+
+            fetch(apiUrl)
+                .then(response => {
+                    if (!response.ok) throw new Error("API response failed");
+                    return response.json();
+                })
+                .then(data => {
+                    if (!data.features || data.features.length === 0) {
+                        statusDiv.innerText = "0 samples found in this area.";
+                        searchBtn.disabled = false;
+                        return null;
+                    }
+
+                    statusDiv.innerText = "Checking sample lineages...";
+
+                    const parentIdsToFetch = new Set();
+                    data.features.forEach(feature => {
+                        const props = feature.properties;
+                        const hasDesc = (props.sample_description && props.sample_description.trim() !== "") || 
+                                         (props.description && props.description.trim() !== "");
+                        
+                        if (!hasDesc && props.parent_sample_id) {
+                            parentIdsToFetch.add(props.parent_sample_id);
+                        }
+                    });
+
+                    const parentFetchPromises = Array.from(parentIdsToFetch).map(parentId => {
+                        return fetch(`https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items/${parentId}`)
+                            .then(res => res.ok ? res.json() : null)
+                            .then(parentData => ({ id: parentId, data: parentData }))
+                            .catch(() => ({ id: parentId, data: null }));
+                    });
+
+                    return Promise.all(parentFetchPromises).then(parentResults => {
+                        const parentDescMap = {};
+                        parentResults.forEach(result => {
+                            if (result.data && result.data.properties) {
+                                const pProps = result.data.properties;
+                                const pDesc = pProps.sample_description || pProps.description || "";
+                                if (pDesc.trim() !== "") {
+                                    parentDescMap[result.id] = pDesc;
+                                }
+                            }
+                        });
+
+                        return { mapData: data, parentDescs: parentDescMap };
+                    });
+                })
+                .then(payload => {
+                    if (!payload) return;
+
+                    currentSearchPayload = payload;
+                    const data = payload.mapData;
+                    const parentDescs = payload.parentDescs;
+
+                    statusDiv.innerText = `Found ${data.features.length} samples.`;
+
+                    const coordinateGroups = {};
+                    data.features.forEach(feature => {
+                        if (feature.geometry && feature.geometry.type === 'Point') {
+                            const lng = feature.geometry.coordinates[0];
+                            const lat = feature.geometry.coordinates[1];
+                            const coordKey = `${lng}_${lat}`;
+
+                            if (!coordinateGroups[coordKey]) {
+                                coordinateGroups[coordKey] = { lat: lat, lng: lng, features: [] };
+                            }
+                            coordinateGroups[coordKey].features.push(feature);
+                        }
+                    });
+
+                    Object.values(coordinateGroups).forEach(group => {
+                        let popupHtml = `<div class="popup-scroll-container">`;
+                        
+                        if (group.features.length > 1) {
+                            popupHtml += `<h4 style="margin: 0 0 12px 0; color: #e67e22; font-size: 13px;">📌 ${group.features.length} samples at this location:</h4>`;
+                        }
+
+                        group.features.forEach((feature, index) => {
+                            const props = feature.properties;
+                            const sampleId = props.id || "Unknown ID";
+                            const sampleName = props.sample_name || "Unnamed Sample";
+                            const sampleType = props.sample_type || "Not Specified";
+                            const parentSampleId = props.parent_sample_id;
+                            
+                            const localDesc = props.sample_description || props.description || "";
+                            let finalDescHtml = '';
+                            
+                            if (localDesc.trim() !== "") {
+                                const truncated = getTruncatedText(localDesc);
+                                finalDescHtml = `<p class="sample-desc"><strong>Desc:</strong> "${truncated}"</p>`;
+                            } else if (parentSampleId && parentDescs[parentSampleId]) {
+                                const truncatedParentDesc = getTruncatedText(parentDescs[parentSampleId]);
+                                finalDescHtml = `<p class="sample-desc parent-desc"><strong>[Parent Desc]:</strong> "${truncatedParentDesc}"</p>`;
+                            }
+
+                            let parentLinkHtml = '';
+                            if (parentSampleId) {
+                                const parentUrl = `https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items/${parentSampleId}`;
+                                parentLinkHtml = `<a class="popup-link parent-link" href="${parentUrl}" target="_blank">View Parent Sample ↗</a><br>`;
+                            }
+
+                            if (index > 0) {
+                                popupHtml += `<hr style="border: 0; border-top: 1px solid #ddd; margin: 12px 0;">`;
+                            }
+
+                            popupHtml += `
+                                <div class="sample-item">
+                                    <h3>${sampleName}</h3>
+                                    <p><strong>ID:</strong> ${sampleId}</p>
+                                    <p><strong>Type:</strong> ${sampleType}</p>
+                                    ${finalDescHtml}
+                                    ${parentLinkHtml}
+                                    <a class="popup-link" href="https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items/${sampleId}" target="_blank">View Full Details ↗</a>
+                                </div>
+                            `;
+                        });
+
+                        popupHtml += `</div>`;
+
+                        const marker = L.marker([group.lat, group.lng]);
+                        marker.bindPopup(popupHtml, { maxHeight: 290, minWidth: 260 });
+                        markersLayer.addLayer(marker);
+                    });
+
+                    searchBtn.disabled = false;
+                    downloadBtn.disabled = false; 
+                })
+                .catch(error => {
+                    console.error("Error processing mapping sequence:", error);
+                    statusDiv.innerText = "Error loading data.";
+                    searchBtn.disabled = false;
+                });
+        });
+
+        // CLIENT-SIDE CSV EXPORT GENERATOR
+        downloadBtn.addEventListener('click', function() {
+            if (!currentSearchPayload) return;
+
+            const features = currentSearchPayload.mapData.features;
+            const parentDescs = currentSearchPayload.parentDescs || {};
+
+            // ADDED LOCALITY FIELDS TO HEADER ARRAY ARCHITECTURE
+            const headers = [
+                'Sample_ID', 'Sample_Name', 'Sample_Type', 
+                'Description', 'Description_Source', 
+                'Locality_Name', 'Locality_Description', 
+                'Parent_Sample_ID', 'Latitude', 'Longitude'
+            ];
+            
+            const rows = features.map(feature => {
+                const props = feature.properties;
+                const id = props.id || '';
+                const name = props.sample_name || '';
+                const type = props.sample_type || '';
+                
+                let desc = props.sample_description || props.description || '';
+                let source = 'Local';
+                
+                if (desc.trim() === '' && props.parent_sample_id && parentDescs[props.parent_sample_id]) {
+                    desc = parentDescs[props.parent_sample_id];
+                    source = 'Parent Fallback';
+                }
+                
+                // NEW ATTRIBUTE EXTRACTIONS TARGETED FROM RAW BGS DATA STREAM
+                const localityName = props.locality_name || props.locality || '';
+                const localityDesc = props.locality_description || props.locality_desc || '';
+                
+                const parentId = props.parent_sample_id || '';
+                const lng = (feature.geometry && feature.geometry.type === 'Point') ? feature.geometry.coordinates[0] : '';
+                const lat = (feature.geometry && feature.geometry.type === 'Point') ? feature.geometry.coordinates[1] : '';
+
+                // Format row fields securely according to RFC specification criteria
+                return [id, name, type, desc, source, localityName, localityDesc, parentId, lat, lng].map(field => {
+                    let text = String(field).replace(/"/g, '""'); 
+                    if (text.includes(',') || text.includes('"') || text.includes('\n') || text.includes('\r')) {
+                        text = `"${text}"`; 
+                    }
+                    return text;
+                });
+            });
+
+            const csvBody = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+            const blob = new Blob([csvBody], { type: 'text/csv;charset=utf-8;' });
+            const dataUrl = URL.createObjectURL(blob);
+            
+            const tempLink = document.createElement("a");
+            tempLink.setAttribute("href", dataUrl);
+            tempLink.setAttribute("download", "bgs_samples_export.csv");
+            tempLink.style.visibility = 'hidden';
+            
+            document.body.appendChild(tempLink);
+            tempLink.click();
+            document.body.removeChild(tempLink); 
+        });
+
+    } else {
+        document.getElementById('map').innerHTML = "<p style='padding:20px; color:red;'><strong>Error:</strong> Map library failed to load. Check your network blocks.</p>";
+    }
+</script>
+
+</body>
+</html>

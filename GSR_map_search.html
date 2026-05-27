@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BGS Map Bounding Box Search</title>
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+    
+    <style>
+        html, body {
+            height: 100%;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        
+        #header {
+            background: #2c3e50;
+            color: white;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 50px;
+            z-index: 2000;
+            box-sizing: border-box;
+        }
+        #header h1 {
+            margin: 0;
+            font-size: 16px;
+        }
+        #header p {
+            margin: 2px 0 0 0;
+            font-size: 11px;
+            color: #bdc3c7;
+        }
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        #search-btn {
+            background-color: #0066cc;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: bold;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        #search-btn:hover {
+            background-color: #0052a3;
+        }
+        #search-btn:disabled {
+            background-color: #7f8c8d;
+            cursor: not-allowed;
+        }
+        #status {
+            font-size: 13px;
+            font-weight: 500;
+        }
+        
+        #map {
+            position: absolute;
+            top: 50px; 
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            background: #e5e3df; 
+        }
+        
+        /* Popup Styling */
+        .popup-scroll-container {
+            padding-right: 5px;
+        }
+        .sample-item h3 {
+            margin: 0 0 6px 0;
+            font-size: 15px;
+            color: #2c3e50;
+        }
+        .sample-item p {
+            margin: 4px 0;
+            font-size: 12px;
+            color: #555;
+            line-height: 1.4;
+        }
+        .sample-desc {
+            font-style: italic;
+            color: #666 !important;
+            background: #f5f5f5;
+            padding: 4px 6px;
+            border-radius: 3px;
+            margin: 6px 0 !important;
+        }
+        /* Color indicator for descriptions pulled from parents */
+        .parent-desc {
+            background: #fdf2e9; 
+            border-left: 3px solid #e67e22;
+        }
+        .popup-link {
+            display: inline-block;
+            margin-top: 6px;
+            color: #0066cc;
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        .popup-link:hover {
+            text-decoration: underline;
+        }
+        .parent-link {
+            color: #e67e22;
+            margin-top: 8px;
+            margin-bottom: 2px;
+        }
+        .leaflet-top.leaflet-right {
+            top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="header">
+    <div>
+        <h1>BGS Generic Samples Register — Map Search</h1>
+        <p>Search places or pan the map, then click "Search This Area" to fetch samples.</p>
+    </div>
+    <div class="controls">
+        <div id="status">Move map to begin</div>
+        <button id="search-btn">Search This Area</button>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+
+<script>
+    if (typeof L !== 'undefined') {
+        
+        const map = L.map('map').setView([54.5, -3.5], 6);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        L.Control.geocoder({
+            defaultMarkGeocode: true,
+            placeholder: "Search for place or postcode...",
+            position: "topright"
+        }).addTo(map);
+
+        const markersLayer = L.layerGroup().addTo(map);
+        const searchBtn = document.getElementById('search-btn');
+        const statusDiv = document.getElementById('status');
+
+        // Helper function to safely extract and truncate description text
+        function getTruncatedText(text, maxWords = 10) {
+            if (!text || text.trim() === "") return "";
+            const words = text.trim().split(/\s+/);
+            return words.length > maxWords ? words.slice(0, maxWords).join(' ') + '...' : text.trim();
+        }
+
+        searchBtn.addEventListener('click', function() {
+            markersLayer.clearLayers();
+            statusDiv.innerText = "Searching BGS API...";
+            searchBtn.disabled = true;
+
+            const bounds = map.getBounds();
+            const bboxParam = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+            const apiUrl = `https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items?bbox=${bboxParam}&limit=100`;
+
+            fetch(apiUrl)
+                .then(response => {
+                    if (!response.ok) throw new Error("API response failed");
+                    return response.json();
+                })
+                .then(data => {
+                    if (!data.features || data.features.length === 0) {
+                        statusDiv.innerText = "0 samples found in this area.";
+                        searchBtn.disabled = false;
+                        return null; // Break the promise chain early if no data
+                    }
+
+                    statusDiv.innerText = "Checking sample lineages...";
+
+                    // 1. Gather all unique parent IDs where the child is missing a description
+                    const parentIdsToFetch = new Set();
+                    data.features.forEach(feature => {
+                        const props = feature.properties;
+                        const hasDesc = (props.sample_description && props.sample_description.trim() !== "") || 
+                                         (props.description && props.description.trim() !== "");
+                        
+                        if (!hasDesc && props.parent_sample_id) {
+                            parentIdsToFetch.add(props.parent_sample_id);
+                        }
+                    });
+
+                    // 2. Fetch all required parent samples asynchronously in parallel
+                    const parentFetchPromises = Array.from(parentIdsToFetch).map(parentId => {
+                        return fetch(`https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items/${parentId}`)
+                            .then(res => res.ok ? res.json() : null)
+                            .then(parentData => ({ id: parentId, data: parentData }))
+                            .catch(() => ({ id: parentId, data: null })); // Fail gracefully
+                    });
+
+                    return Promise.all(parentFetchPromises).then(parentResults => {
+                        // Build a fast lookup dictionary of parent descriptions
+                        const parentDescMap = {};
+                        parentResults.forEach(result => {
+                            if (result.data && result.data.properties) {
+                                const pProps = result.data.properties;
+                                const pDesc = pProps.sample_description || pProps.description || "";
+                                if (pDesc.trim() !== "") {
+                                    parentDescMap[result.id] = pDesc;
+                                }
+                            }
+                        });
+
+                        // Pass both the original maps data and our new parent descriptions map forward
+                        return { mapData: data, parentDescs: parentDescMap };
+                    });
+                })
+                .then(payload => {
+                    // If payload is null, a previous step handled the exit
+                    if (!payload) return;
+
+                    const data = payload.mapData;
+                    const parentDescs = payload.parentDescs;
+
+                    statusDiv.innerText = `Found ${data.features.length} samples.`;
+
+                    // 3. Group features by coordinates (Consolidated Popup Logic)
+                    const coordinateGroups = {};
+                    data.features.forEach(feature => {
+                        if (feature.geometry && feature.geometry.type === 'Point') {
+                            const lng = feature.geometry.coordinates[0];
+                            const lat = feature.geometry.coordinates[1];
+                            const coordKey = `${lng}_${lat}`;
+
+                            if (!coordinateGroups[coordKey]) {
+                                coordinateGroups[coordKey] = { lat: lat, lng: lng, features: [] };
+                            }
+                            coordinateGroups[coordKey].features.push(feature);
+                        }
+                    });
+
+                    // 4. Build popups and markers
+                    Object.values(coordinateGroups).forEach(group => {
+                        let popupHtml = `<div class="popup-scroll-container">`;
+                        
+                        if (group.features.length > 1) {
+                            popupHtml += `<h4 style="margin: 0 0 12px 0; color: #e67e22; font-size: 13px;">📌 ${group.features.length} samples at this location:</h4>`;
+                        }
+
+                        group.features.forEach((feature, index) => {
+                            const props = feature.properties;
+                            const sampleId = props.id || "Unknown ID";
+                            const sampleName = props.sample_name || "Unnamed Sample";
+                            const sampleType = props.sample_type || "Not Specified";
+                            const parentSampleId = props.parent_sample_id;
+                            
+                            // 5. Look for local description, fallback to the parent map description if empty
+                            const localDesc = props.sample_description || props.description || "";
+                            let finalDescHtml = '';
+                            
+                            if (localDesc.trim() !== "") {
+                                const truncated = getTruncatedText(localDesc);
+                                finalDescHtml = `<p class="sample-desc"><strong>Desc:</strong> "${truncated}"</p>`;
+                            } else if (parentSampleId && parentDescs[parentSampleId]) {
+                                // Fallback applied!
+                                const truncatedParentDesc = getTruncatedText(parentDescs[parentSampleId]);
+                                finalDescHtml = `<p class="sample-desc parent-desc"><strong>[Parent Desc]:</strong> "${truncatedParentDesc}"</p>`;
+                            }
+
+                            let parentLinkHtml = '';
+                            if (parentSampleId) {
+                                const parentUrl = `https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items/${parentSampleId}`;
+                                parentLinkHtml = `<a class="popup-link parent-link" href="${parentUrl}" target="_blank">View Parent Sample ↗</a><br>`;
+                            }
+
+                            if (index > 0) {
+                                popupHtml += `<hr style="border: 0; border-top: 1px solid #ddd; margin: 12px 0;">`;
+                            }
+
+                            popupHtml += `
+                                <div class="sample-item">
+                                    <h3>${sampleName}</h3>
+                                    <p><strong>ID:</strong> ${sampleId}</p>
+                                    <p><strong>Type:</strong> ${sampleType}</p>
+                                    ${finalDescHtml}
+                                    ${parentLinkHtml}
+                                    <a class="popup-link" href="https://ogcapi.bgs.ac.uk/collections/generic-samples-register/items/${sampleId}" target="_blank">View Full Details ↗</a>
+                                </div>
+                            `;
+                        });
+
+                        popupHtml += `</div>`;
+
+                        const marker = L.marker([group.lat, group.lng]);
+                        marker.bindPopup(popupHtml, { maxHeight: 290, minWidth: 260 });
+                        markersLayer.addLayer(marker);
+                    });
+
+                    searchBtn.disabled = false;
+                })
+                .catch(error => {
+                    console.error("Error processing mapping sequence:", error);
+                    statusDiv.innerText = "Error loading data.";
+                    searchBtn.disabled = false;
+                });
+        });
+    } else {
+        document.getElementById('map').innerHTML = "<p style='padding:20px; color:red;'><strong>Error:</strong> Map library failed to load. Check your network blocks.</p>";
+    }
+</script>
+
+</body>
+</html>
